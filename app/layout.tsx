@@ -10,7 +10,6 @@ import "./globals.css"
 export const metadata: Metadata = {
   title: "Air Quality Monitoring System",
   description: "Real-time environmental monitoring with ESP32 sensors",
-  generator: "v0.app",
 }
 
 export default function RootLayout({
