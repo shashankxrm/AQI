@@ -26,40 +26,75 @@ export default function Dashboard() {
 
   const fetchSensorData = async () => {
     try {
-      const response = await fetch("/api/mock-sensor")
+      // Fetch current sensor reading from MongoDB
+      const response = await fetch("/api/sensor-data/current")
       const result = await response.json()
 
-      if (result.success) {
+      if (result.success && result.data) {
         const newReading: SensorReading = {
-          ...result.data,
-          id: Date.now().toString(),
+          id: result.data.id,
+          timestamp: result.data.timestamp,
+          temperature: result.data.temperature,
+          humidity: result.data.humidity,
+          aqi: result.data.aqi,
+          gasConcentration: result.data.gasConcentration,
+          status: result.data.status || "online",
         }
 
-        setSensorData((prev) => [...prev.slice(-49), newReading])
+        setSensorData((prev) => {
+          // Only add if it's a new reading (different timestamp)
+          const lastReading = prev[prev.length - 1]
+          if (!lastReading || lastReading.timestamp !== newReading.timestamp) {
+            return [...prev.slice(-49), newReading]
+          }
+          return prev
+        })
         setLastUpdate(new Date().toLocaleTimeString())
         setIsOnline(true)
 
-        const hours = Array.from({ length: 12 }, (_, i) => {
-          const hour = new Date(Date.now() - (11 - i) * 60 * 60 * 1000).getHours().toString().padStart(2, "0") + ":00"
-
-          // Add some variation around current values
-          const tempVariation = (Math.random() - 0.5) * 4
-          const humidityVariation = (Math.random() - 0.5) * 10
-          const aqiVariation = (Math.random() - 0.5) * 20
-
-          return {
-            hour,
-            avgTemperature: Math.round((newReading.temperature + tempVariation) * 10) / 10,
-            avgHumidity: Math.round(newReading.humidity + humidityVariation),
-            avgAQI: Math.round(Math.max(0, newReading.aqi + aqiVariation)),
-          }
-        })
-        setHourlyData(hours)
+        // Fetch historical data for hourly chart
+        const histResponse = await fetch("/api/sensor-data/historical?hours=12")
+        const histResult = await histResponse.json()
+        
+        if (histResult.success && histResult.data.length > 0) {
+          // Process historical data into hourly averages
+          const hourlyAverages = processHistoricalData(histResult.data)
+          setHourlyData(hourlyAverages)
+        }
+      } else {
+        console.log("No sensor data available yet")
+        setIsOnline(false)
       }
     } catch (error) {
       console.error("Failed to fetch sensor data:", error)
       setIsOnline(false)
     }
+  }
+
+  // Helper function to process historical data into hourly averages
+  const processHistoricalData = (data: any[]) => {
+    if (data.length === 0) return []
+    
+    // Group data by hour
+    const hourlyGroups: { [key: string]: any[] } = {}
+    
+    data.forEach(reading => {
+      const date = new Date(reading.timestamp)
+      const hour = date.getHours().toString().padStart(2, "0") + ":00"
+      
+      if (!hourlyGroups[hour]) {
+        hourlyGroups[hour] = []
+      }
+      hourlyGroups[hour].push(reading)
+    })
+
+    // Calculate averages for each hour
+    return Object.entries(hourlyGroups).map(([hour, readings]) => ({
+      hour,
+      avgTemperature: Math.round((readings.reduce((sum, r) => sum + r.temperature, 0) / readings.length) * 10) / 10,
+      avgHumidity: Math.round(readings.reduce((sum, r) => sum + r.humidity, 0) / readings.length),
+      avgAQI: Math.round(readings.reduce((sum, r) => sum + r.aqi, 0) / readings.length),
+    })).sort((a, b) => a.hour.localeCompare(b.hour))
   }
 
   useEffect(() => {
@@ -102,7 +137,7 @@ export default function Dashboard() {
           </Badge>
           <Badge variant="secondary" className="px-3 py-1">
             <Wifi className="h-3 w-3 mr-1" />
-            Mock API Mode
+            Real Data Mode
           </Badge>
         </div>
 
@@ -177,15 +212,15 @@ export default function Dashboard() {
               </div>
               <div className="flex justify-between">
                 <span className="text-sm text-muted-foreground">Data Source:</span>
-                <span className="text-sm font-medium">Mock API</span>
+                <span className="text-sm font-medium text-green-600">MongoDB Atlas</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-sm text-muted-foreground">Storage:</span>
-                <span className="text-sm font-medium">In-Memory</span>
+                <span className="text-sm font-medium text-green-600">Cloud Database</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-sm text-muted-foreground">Ready for:</span>
-                <span className="text-sm font-medium text-blue-600">MongoDB</span>
+                <span className="text-sm text-muted-foreground">ESP32 Ready:</span>
+                <span className="text-sm font-medium text-blue-600">Yes</span>
               </div>
             </div>
           </div>
