@@ -1,6 +1,7 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
 #include <WiFiClient.h>
+#include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <DHT.h>
 
@@ -10,12 +11,17 @@ const char* ssid = "107108109";        // Try 2.4GHz network (remove -5G)
 const char* password = "107-108-109";
 
 // API Configuration  
-const char* serverUrl = "http://192.168.0.147:3000/api/sensor-data/ingest";
+const char* serverUrl = "https://aqi-one.vercel.app/api/sensor-data/ingest";
+const char* localServerUrl = "http://192.168.0.147:3000/api/sensor-data/ingest";
 const char* apiKey = "esp32-secret-key-2025-aqi-sensor-secure";
 
-// Alternative URLs to try if main fails
-const char* serverUrlAlt1 = "http://localhost:3000/api/sensor-data/ingest";
-const char* serverUrlAlt2 = "http://127.0.0.1:3000/api/sensor-data/ingest";
+// Server configuration
+const char* prodHost = "aqi-one.vercel.app";
+const int httpsPort = 443;
+const int httpPort = 3000;
+
+// Try production first, then local development server
+bool useProduction = true;
 
 // Hardware Configuration - ESP8266 NodeMCU pins
 #define DHTPIN D2                   // DHT11 data pin (NodeMCU D2 = GPIO4)
@@ -47,6 +53,9 @@ struct SensorData {
   bool valid;
 };
 
+// Function declarations
+bool sendDataRequest(HTTPClient &http, SensorData data, String serverType);
+
 // ===================== SETUP FUNCTION =====================
 void setup() {
   Serial.begin(115200);
@@ -55,6 +64,7 @@ void setup() {
   Serial.println("\n========================================");
   Serial.println("  ESP8266 NodeMCU Air Quality Monitor");
   Serial.println("    DHT11 + MQ6 Configuration");
+  Serial.println("    Production: aqi-one.vercel.app");
   Serial.println("========================================\n");
 
   // Initialize pins
@@ -274,23 +284,59 @@ void sendDataToServer(SensorData data) {
   Serial.println("🔍 Network Diagnostics:");
   Serial.println("ESP8266 IP: " + WiFi.localIP().toString());
   Serial.println("Gateway: " + WiFi.gatewayIP().toString());
-  Serial.println("Target Server: 192.168.0.147:3000");
   
-  // Create HTTP client
-  WiFiClient client;
   HTTPClient http;
+  bool success = false;
   
-  Serial.print("📤 Sending data to server... ");
-  
-  // Simplified HTTP setup for ESP8266
-  if (!http.begin(client, "192.168.0.147", 3000, "/api/sensor-data/ingest")) {
-    Serial.println("❌ HTTP Begin Failed!");
-    return;
+  // Try production server first (HTTPS)
+  if (useProduction) {
+    Serial.println("🌐 Trying Production: " + String(serverUrl));
+    WiFiClientSecure secureClient;
+    secureClient.setInsecure(); // Skip SSL certificate verification for simplicity
+    
+    if (http.begin(secureClient, serverUrl)) {
+      http.addHeader("Content-Type", "application/json");
+      http.addHeader("x-api-key", apiKey);
+      http.setTimeout(15000); // 15 second timeout for HTTPS
+      
+      success = sendDataRequest(http, data, "Production HTTPS");
+      http.end();
+      
+      if (success) return; // Success! Exit function
+      
+      Serial.println("⚠️ Production server failed, trying local development server...");
+      useProduction = false; // Switch to local for next attempts
+    }
   }
   
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("x-api-key", apiKey);
-  http.setTimeout(15000); // 15 second timeout
+  // Fallback to local development server (HTTP)
+  if (!success) {
+    Serial.println("🏠 Trying Local: " + String(localServerUrl));
+    WiFiClient client;
+    
+    if (http.begin(client, localServerUrl)) {
+      http.addHeader("Content-Type", "application/json");
+      http.addHeader("x-api-key", apiKey);
+      http.setTimeout(10000); // 10 second timeout for HTTP
+      
+      success = sendDataRequest(http, data, "Local HTTP");
+      http.end();
+      
+      if (success) {
+        useProduction = true; // Reset for next time
+        return;
+      }
+    }
+  }
+  
+  if (!success) {
+    Serial.println("❌ All servers failed!");
+    consecutiveFailures++;
+  }
+}
+
+bool sendDataRequest(HTTPClient &http, SensorData data, String serverType) {
+  Serial.print("📤 Sending to " + serverType + "... ");
   
   // Create JSON payload
   StaticJsonDocument<300> doc;
@@ -322,18 +368,18 @@ void sendDataToServer(SensorData data) {
       Serial.println("✅ SUCCESS");
       Serial.println("📥 Server Response: " + response);
       blinkSuccess();
+      consecutiveFailures = 0; // Reset failure counter
+      return true;
     } else {
       Serial.println("⚠️ HTTP " + String(httpResponseCode));
       Serial.println("📥 Response: " + response);
+      return false;
     }
   } else {
     Serial.println("❌ FAILED");
     Serial.println("💥 Error: " + String(httpResponseCode));
-    Serial.println("🔍 Check server URL and network connection");
-    consecutiveFailures++;
+    return false;
   }
-  
-  http.end();
 }
 
 // ===================== LED FUNCTIONS =====================
