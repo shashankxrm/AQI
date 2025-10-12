@@ -1,11 +1,14 @@
 import { NextResponse } from 'next/server'
 import clientPromise from '@/lib/mongodb'
 
-export async function GET(request: Request) {
+// Force dynamic rendering for this route
+export const dynamic = 'force-dynamic'
+
+export async function GET(request: Request, { params }: { params: {} }) {
   try {
-    const { searchParams } = new URL(request.url)
-    const hours = parseInt(searchParams.get('hours') || '24')
-    const limit = parseInt(searchParams.get('limit') || '1000')
+    const url = new URL(request.url)
+    const hours = parseInt(url.searchParams.get('hours') || '24')
+    const limit = parseInt(url.searchParams.get('limit') || '1000')
 
     const client = await clientPromise
     const db = client.db('aqi_monitoring')

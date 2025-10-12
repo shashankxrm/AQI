@@ -11,7 +11,8 @@ const char* ssid = "107108109";        // Try 2.4GHz network (remove -5G)
 const char* password = "107-108-109";
 
 // API Configuration  
-const char* serverUrl = "https://aqi-one.vercel.app/api/sensor-data/ingest";
+const char* serverUrlHTTPS = "https://aqi-one.vercel.app/api/sensor-data/ingest";
+const char* serverUrlHTTP = "http://aqi-one.vercel.app/api/sensor-data/ingest";
 const char* localServerUrl = "http://192.168.0.147:3000/api/sensor-data/ingest";
 const char* apiKey = "esp32-secret-key-2025-aqi-sensor-secure";
 
@@ -290,21 +291,42 @@ void sendDataToServer(SensorData data) {
   
   // Try production server first (HTTPS)
   if (useProduction) {
-    Serial.println("🌐 Trying Production: " + String(serverUrl));
+    Serial.println("🌐 Trying Production HTTPS: " + String(serverUrlHTTPS));
     WiFiClientSecure secureClient;
     secureClient.setInsecure(); // Skip SSL certificate verification for simplicity
+    secureClient.setBufferSizes(1024, 1024); // Reduce buffer size for ESP8266
+    secureClient.setTimeout(15000); // Set client timeout
     
-    if (http.begin(secureClient, serverUrl)) {
+    if (http.begin(secureClient, serverUrlHTTPS)) {
       http.addHeader("Content-Type", "application/json");
       http.addHeader("x-api-key", apiKey);
       http.setTimeout(15000); // 15 second timeout for HTTPS
+      http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); // Follow redirects
       
       success = sendDataRequest(http, data, "Production HTTPS");
       http.end();
       
       if (success) return; // Success! Exit function
       
-      Serial.println("⚠️ Production server failed, trying local development server...");
+      Serial.println("⚠️ Production HTTPS failed, trying Production HTTP...");
+    }
+    
+    // Try HTTP to production if HTTPS fails
+    Serial.println("🌐 Trying Production HTTP: " + String(serverUrlHTTP));
+    WiFiClient client;
+    
+    if (http.begin(client, serverUrlHTTP)) {
+      http.addHeader("Content-Type", "application/json");
+      http.addHeader("x-api-key", apiKey);
+      http.setTimeout(10000); // 10 second timeout for HTTP
+      http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); // Follow redirects automatically
+      
+      success = sendDataRequest(http, data, "Production HTTP");
+      http.end();
+      
+      if (success) return; // Success! Exit function
+      
+      Serial.println("⚠️ Production servers failed, trying local development server...");
       useProduction = false; // Switch to local for next attempts
     }
   }
@@ -318,6 +340,7 @@ void sendDataToServer(SensorData data) {
       http.addHeader("Content-Type", "application/json");
       http.addHeader("x-api-key", apiKey);
       http.setTimeout(10000); // 10 second timeout for HTTP
+      http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); // Follow redirects
       
       success = sendDataRequest(http, data, "Local HTTP");
       http.end();
@@ -370,6 +393,10 @@ bool sendDataRequest(HTTPClient &http, SensorData data, String serverType) {
       blinkSuccess();
       consecutiveFailures = 0; // Reset failure counter
       return true;
+    } else if (httpResponseCode == 301 || httpResponseCode == 302 || httpResponseCode == 308) {
+      Serial.println("🔄 Redirect " + String(httpResponseCode) + " - should be handled automatically");
+      Serial.println("📥 Response: " + response);
+      return false; // Let it try the next method
     } else {
       Serial.println("⚠️ HTTP " + String(httpResponseCode));
       Serial.println("📥 Response: " + response);
