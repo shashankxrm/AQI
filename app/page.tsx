@@ -23,6 +23,8 @@ export default function Dashboard() {
   >([])
   const [lastUpdate, setLastUpdate] = useState<string>("")
   const [isOnline, setIsOnline] = useState(true)
+  const [lastDataTime, setLastDataTime] = useState<Date | null>(null)
+  const [systemStatus, setSystemStatus] = useState<"online" | "offline" | "unknown">("unknown")
 
   const fetchSensorData = async () => {
     try {
@@ -50,7 +52,9 @@ export default function Dashboard() {
           return prev
         })
         setLastUpdate(new Date().toLocaleTimeString())
+        setLastDataTime(new Date(newReading.timestamp))
         setIsOnline(true)
+        setSystemStatus("online")
 
         // Fetch historical data for hourly chart
         const histResponse = await fetch("/api/sensor-data/historical?hours=12")
@@ -64,10 +68,33 @@ export default function Dashboard() {
       } else {
         console.log("No sensor data available yet")
         setIsOnline(false)
+        setSystemStatus("offline")
       }
     } catch (error) {
       console.error("Failed to fetch sensor data:", error)
       setIsOnline(false)
+      setSystemStatus("offline")
+    }
+  }
+
+  // Check if system is offline based on last data timestamp
+  const checkSystemStatus = () => {
+    if (!lastDataTime) {
+      setSystemStatus("unknown")
+      return
+    }
+
+    const now = new Date()
+    const timeDiff = now.getTime() - lastDataTime.getTime()
+    const minutesSinceLastData = timeDiff / (1000 * 60)
+
+    // Consider offline if no data for more than 2 minutes (ESP32 sends every 10s)
+    if (minutesSinceLastData > 2) {
+      setSystemStatus("offline")
+      setIsOnline(false)
+    } else {
+      setSystemStatus("online")
+      setIsOnline(true)
     }
   }
 
@@ -99,9 +126,22 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchSensorData()
-    const interval = setInterval(fetchSensorData, 5000)
-    return () => clearInterval(interval)
+    // Match ESP32 interval (10s) + small buffer to avoid missing updates
+    const fetchInterval = setInterval(fetchSensorData, 12000)
+    
+    // Check system status every 30 seconds
+    const statusInterval = setInterval(checkSystemStatus, 30000)
+    
+    return () => {
+      clearInterval(fetchInterval)
+      clearInterval(statusInterval)
+    }
   }, [])
+
+  // Run status check whenever lastDataTime changes
+  useEffect(() => {
+    checkSystemStatus()
+  }, [lastDataTime])
 
   const currentData = sensorData[sensorData.length - 1]
 
@@ -127,9 +167,23 @@ export default function Dashboard() {
         <div className="flex flex-wrap items-center justify-center gap-4">
           <Badge variant="outline" className="px-4 py-2">
             <div
-              className={`w-2 h-2 rounded-full mr-2 animate-pulse ${isOnline ? "bg-green-500" : "bg-red-500"}`}
+              className={`w-2 h-2 rounded-full mr-2 animate-pulse ${
+                systemStatus === "online" 
+                  ? "bg-green-500" 
+                  : systemStatus === "offline" 
+                  ? "bg-red-500" 
+                  : "bg-yellow-500"
+              }`}
             ></div>
-            {isOnline ? "System Online" : "System Offline"} - Last Update: {lastUpdate}
+            {systemStatus === "online" && "ESP32 Online"}
+            {systemStatus === "offline" && "ESP32 Offline - Check Power/WiFi"}
+            {systemStatus === "unknown" && "ESP32 Status Unknown"}
+            {lastUpdate && ` - Last Update: ${lastUpdate}`}
+            {lastDataTime && systemStatus === "offline" && (
+              <span className="text-red-600 ml-2">
+                (Last data: {Math.round((new Date().getTime() - lastDataTime.getTime()) / (1000 * 60))} min ago)
+              </span>
+            )}
           </Badge>
           <Badge variant="secondary" className="px-3 py-1">
             <Database className="h-3 w-3 mr-1" />
@@ -142,6 +196,26 @@ export default function Dashboard() {
         </div>
 
         {currentData && currentData.aqi > 100 && <AlertBanner aqi={currentData.aqi} />}
+        
+        {systemStatus === "offline" && (
+          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+            <div className="flex items-center gap-3">
+              <div className="w-4 h-4 rounded-full bg-red-500 animate-pulse"></div>
+              <div>
+                <h3 className="font-semibold text-red-800 dark:text-red-200">ESP32 System Offline</h3>
+                <p className="text-sm text-red-600 dark:text-red-300">
+                  No data received from sensors. Please check:
+                </p>
+                <ul className="text-sm text-red-600 dark:text-red-300 mt-1 ml-4 list-disc">
+                  <li>ESP32 power connection (USB/wall adapter)</li>
+                  <li>WiFi network connectivity</li>
+                  <li>ESP32 status LED (should be blinking)</li>
+                  <li>Serial monitor for error messages</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        )}
 
         {sensorData.length > 0 && <EnvironmentalOverview data={sensorData} />}
 
@@ -164,15 +238,29 @@ export default function Dashboard() {
             <div className="space-y-3">
               <div className="flex justify-between">
                 <span className="text-sm text-muted-foreground">ESP32 Module:</span>
-                <span className="text-sm font-medium text-green-600">Active</span>
+                <span className={`text-sm font-medium ${
+                  systemStatus === "online" ? "text-green-600" : 
+                  systemStatus === "offline" ? "text-red-600" : "text-yellow-600"
+                }`}>
+                  {systemStatus === "online" ? "Active" : 
+                   systemStatus === "offline" ? "Offline" : "Unknown"}
+                </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-sm text-muted-foreground">BME680 Sensor:</span>
-                <span className="text-sm font-medium text-green-600">Connected</span>
+                <span className="text-sm text-muted-foreground">DHT11 Sensor:</span>
+                <span className={`text-sm font-medium ${
+                  systemStatus === "online" ? "text-green-600" : "text-gray-500"
+                }`}>
+                  {systemStatus === "online" ? "Connected" : "No Signal"}
+                </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-sm text-muted-foreground">MQ135 Sensor:</span>
-                <span className="text-sm font-medium text-green-600">Operational</span>
+                <span className="text-sm text-muted-foreground">MQ6 Sensor:</span>
+                <span className={`text-sm font-medium ${
+                  systemStatus === "online" ? "text-green-600" : "text-gray-500"
+                }`}>
+                  {systemStatus === "online" ? "Operational" : "No Signal"}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-sm text-muted-foreground">Update Rate:</span>
